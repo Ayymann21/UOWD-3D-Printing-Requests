@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3D Print Request Portal</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--tx:#1b1f27;--mu:#667085;--bd:#dfe3ea;--ac:#2f5bea;--ok:#12805c;--no:#c0362c;--wa:#b26a00}
+@media(prefers-color-scheme:dark){:root{--bg:#14161b;--card:#1e2128;--tx:#eceef2;--mu:#9aa3b2;--bd:#323744;--ac:#7b9bff;--ok:#4cc9a0;--no:#ff7b70;--wa:#f0b24a}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:14px 20px;background:var(--card);border-bottom:1px solid var(--bd)}
+h1{font-size:18px;margin:0}h2{font-size:16px;margin:0 0 12px}main{max-width:1000px;margin:0 auto;padding:20px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:18px;margin-bottom:16px}
+button,.btn{font:inherit;border:1px solid var(--bd);background:var(--card);color:var(--tx);border-radius:8px;padding:7px 13px;cursor:pointer}
+button.pri,.btn.pri{background:var(--ac);border-color:var(--ac);color:#fff}button.on{border-color:var(--ac);color:var(--ac);font-weight:600}
+button.ok{color:var(--ok);border-color:var(--ok)}button.no{color:var(--no);border-color:var(--no)}button.wa{color:var(--wa);border-color:var(--wa)}button:disabled{opacity:.5}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+label{display:block;font-size:13px;color:var(--mu);margin-bottom:4px}
+input,select,textarea{width:100%;font:inherit;padding:8px 10px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx)}
+.msg{padding:10px 12px;border-radius:8px;margin:12px 0;border:1px solid var(--bd)}.msg.err{color:var(--no);border-color:var(--no)}.msg.good{color:var(--ok);border-color:var(--ok)}
+.pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;border:1px solid currentColor}
+.Pending{color:var(--mu)}.Approved,.Available{color:var(--ok)}.Rejected,.Not-Functional{color:var(--no)}.MoreInfo,.Occupied{color:var(--wa)}.Under-Maintenance{color:var(--ac)}
+.req{border-top:1px solid var(--bd);padding:14px 0}.req:first-child{border-top:0}
+.meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:4px 16px;color:var(--mu);font-size:13px;margin:8px 0}.meta b{color:var(--tx);font-weight:500}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.scroll{overflow-x:auto}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid var(--bd);font-size:14px}
+.modal{position:fixed;inset:0;background:#0008;display:flex;align-items:center;justify-content:center;padding:16px;z-index:9}
+.modal>div{background:var(--card);border-radius:12px;padding:20px;max-width:560px;width:100%;max-height:90%;overflow:auto}.small{font-size:13px;color:var(--mu)}
+</style></head><body>
+<header><h1>🖨️ 3D Print Request Portal</h1><div class="row" id="nav"></div></header>
+<main id="app"></main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="config.js"></script>
+<script>
+const C=window.APP_CONFIG,sb=supabase.createClient(C.SUPABASE_URL,C.SUPABASE_ANON_KEY);
+const TRI=["Autumn 2026","Winter 2027","Spring 2027"],MAT=["PLA","ABS","PETG","TPU","PA","Composites (GF/CF)","Multi-material","Other"],PST=["Available","Occupied","Under Maintenance","Not Functional"];
+const $=s=>document.querySelector(s),esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const cls=s=>String(s).replace(/\s+/g,"-");
+const uni=e=>{e=(e||"").toLowerCase();const d=C.ALLOWED_DOMAIN.toLowerCase();return e.endsWith("@"+d)||e.endsWith("."+d)};
+let session=null,isAdmin=false,view="student",tab="requests",filter="All",reqs=[],printers=[],mine=[],notice=null;
+
+async function boot(){
+  const{data}=await sb.auth.getSession();await setSession(data.session);
+  sb.auth.onAuthStateChange((_e,s)=>{if((s?.user?.id||null)!==(session?.user?.id||null))setSession(s)});
+}
+async function setSession(s){
+  session=s;isAdmin=false;
+  if(s){const{data}=await sb.rpc("is_admin");isAdmin=!!data;view=isAdmin?"admin":"student";await load();}
+  render();
+}
+async function load(){
+  if(isAdmin){
+    reqs=(await sb.from("requests").select("*").order("created_at",{ascending:false})).data||[];
+    printers=(await sb.from("printers").select("*").order("brand")).data||[];
+  }
+  mine=(await sb.from("requests").select("*").eq("user_id",session.user.id).order("created_at",{ascending:false})).data||[];
+}
+function render(){
+  const n=$("#nav");n.innerHTML="";
+  if(session){
+    if(isAdmin)[["student","Student form"],["admin","Admin"]].forEach(([k,l])=>{const b=document.createElement("button");b.textContent=l;if(view===k)b.className="on";b.onclick=()=>{view=k;render()};n.append(b)});
+    const o=document.createElement("button");o.textContent="Sign out ("+session.user.email+")";o.onclick=()=>sb.auth.signOut();n.append(o);
+  }
+  !session?renderLogin():(view==="admin"&&isAdmin?renderAdmin():renderStudent());
+}
+const flash=()=>notice?`<div class="msg ${notice.t}">${esc(notice.m)}</div>`:"";
+
+/* ---------- LOGIN ---------- */
+function renderLogin(){
+  $("#app").innerHTML=`<div class="card" style="max-width:460px;margin:40px auto"><h2>Sign in</h2>${flash()}<p class="small">Enter your university email. We'll send you a one-time sign-in link.</p><label>Email</label><input id="le" type="email" placeholder="you@${esc(C.ALLOWED_DOMAIN)}"><br><br><button class="pri" id="lb">Send sign-in link</button></div>`;
+  $("#lb").onclick=async()=>{const e=$("#le").value.trim();if(!e)return;
+    const{error}=await sb.auth.signInWithOtp({email:e,options:{emailRedirectTo:location.origin+location.pathname}});
+    notice=error?{t:"err",m:error.message}:{t:"good",m:"Check your inbox for the sign-in link."};renderLogin();};
+}
+
+/* ---------- STUDENT ---------- */
+function renderStudent(){
+  const em=session.user.email,ok=uni(em);
+  $("#app").innerHTML=`<div class="card"><h2>Submit a 3D printing request</h2>${flash()}
+  ${ok?"":`<div class="msg err">Only university email addresses (@${esc(C.ALLOWED_DOMAIN)}) can submit requests. You are signed in as ${esc(em)}.</div>`}
+  <div class="grid">
+  <div><label>Student name *</label><input id="name"></div><div><label>Student ID *</label><input id="sid"></div>
+  <div><label>Student email address *</label><input id="email" value="${esc(em)}" readonly></div>
+  <div><label>Trimester *</label><select id="tri">${TRI.map(o=>`<option>${o}</option>`).join("")}</select></div>
+  <div><label>Course code *</label><input id="course"></div><div><label>Course / project supervisor *</label><input id="sup"></div>
+  <div><label>Material choice *</label><select id="mat">${MAT.map(o=>`<option>${o}</option>`).join("")}</select></div>
+  <div><label>If Multi Material/Other, specify (optional)</label><input id="matx"></div>
+  <div><label>Printing time estimate *</label><input id="time" placeholder="e.g. 4 h 30 min"></div>
+  <div><label>Material consumption estimate *</label><input id="cons" placeholder="e.g. 85 g"></div>
+  <div><label>3D printing request form *</label><input id="ff" type="file"></div><div><label>Slicing file *</label><input id="sf" type="file"></div></div>
+  <p class="small">All fields are mandatory except the "specify" field.</p><button class="pri" id="sub" ${ok?"":"disabled"}>Submit request</button></div>
+  <div class="card"><h2>My requests</h2>${mine.length?mine.map(r=>`<div class="req"><div class="row" style="justify-content:space-between"><b>${esc(r.course)} · ${esc(r.material)}</b><span class="pill ${cls(r.status.replace(" ",""))}">${esc(r.status)}</span></div><div class="small">${new Date(r.created_at).toLocaleString()}${r.admin_note?" — "+esc(r.admin_note):""}</div></div>`).join(""):`<p class="small">No requests yet.</p>`}</div>`;
+  $("#sub").onclick=submit;
+}
+async function up(file,tag){
+  const path=`${session.user.id}/${Date.now()}-${tag}-${file.name.replace(/[^\w.\-]/g,"_")}`;
+  const{error}=await sb.storage.from("files").upload(path,file);if(error)throw error;return path;
+}
+async function submit(){
+  const g=i=>$("#"+i).value.trim(),need=["name","sid","course","sup","time","cons"];
+  if(need.some(i=>!g(i))||!$("#ff").files[0]||!$("#sf").files[0]){notice={t:"err",m:"Please complete all mandatory fields and attach both files."};return renderStudent();}
+  const b=$("#sub");b.disabled=true;b.textContent="Uploading…";
+  try{
+    const f1=await up($("#ff").files[0],"form"),f2=await up($("#sf").files[0],"slice");
+    const{error}=await sb.from("requests").insert({name:g("name"),student_id:g("sid"),email:session.user.email,trimester:g("tri"),course:g("course"),supervisor:g("sup"),material:g("mat"),material_specify:g("matx")||null,time_est:g("time"),consumption:g("cons"),request_form_path:f1,slicing_file_path:f2});
+    if(error)throw error;
+    notice={t:"good",m:"Request submitted. You'll receive the decision by email."};await load();
+  }catch(e){notice={t:"err",m:"Submission failed: "+(e.message||e)};}
+  renderStudent();
+}
+
+/* ---------- ADMIN ---------- */
+function renderAdmin(){
+  $("#app").innerHTML=`<div class="row" style="margin-bottom:14px"><button id="t1" class="${tab==="requests"?"on":""}">Requests (${reqs.length})</button><button id="t3" class="${tab==="stats"?"on":""}">Statistics</button><button id="t2" class="${tab==="printers"?"on":""}">3D printers (${printers.length})</button><button id="rf">↻ Refresh</button></div>${flash()}<div id="pane"></div>`;
+  $("#t1").onclick=()=>{tab="requests";renderAdmin()};$("#t2").onclick=()=>{tab="printers";renderAdmin()};$("#t3").onclick=()=>{tab="stats";renderAdmin()};
+  $("#rf").onclick=async()=>{await load();renderAdmin()};
+  tab==="requests"?paneReq():tab==="stats"?paneStats():panePrint();
+}
+function paneReq(){
+  const st=["All","Pending","Approved","Rejected","More Info"],list=reqs.filter(r=>filter==="All"||r.status===filter);
+  $("#pane").innerHTML=`<div class="card"><div class="row" style="margin-bottom:12px"><span class="pill">Submitted: <b>${reqs.length}</b></span><span class="pill Approved">Responded: <b>${reqs.filter(r=>r.status!=="Pending").length}</b></span><span class="pill MoreInfo">Awaiting response: <b>${reqs.filter(r=>r.status==="Pending").length}</b></span></div>
+  <div class="row" style="margin-bottom:8px">${st.map(s=>`<button data-f="${s}" class="${filter===s?"on":""}">${s}</button>`).join("")}</div>
+  ${list.length?list.map(r=>`<div class="req"><div class="row" style="justify-content:space-between"><b>${esc(r.name)} <span class="small">(${esc(r.student_id)})</span></b><span class="pill ${cls(r.status.replace(" ",""))}">${esc(r.status)}</span></div>
+  <div class="meta"><span>Email: <b>${esc(r.email)}</b></span><span>Trimester: <b>${esc(r.trimester)}</b></span><span>Course: <b>${esc(r.course)}</b></span><span>Supervisor: <b>${esc(r.supervisor)}</b></span><span>Material: <b>${esc(r.material)}${r.material_specify?" ("+esc(r.material_specify)+")":""}</b></span><span>Time: <b>${esc(r.time_est)}</b></span><span>Consumption: <b>${esc(r.consumption)}</b></span><span>Submitted: <b>${new Date(r.created_at).toLocaleString()}</b></span></div>
+  ${r.admin_note?`<div class="small">Note sent: ${esc(r.admin_note)}</div>`:""}
+  <div class="row"><button data-d="${r.request_form_path}">⬇ Request form</button><button data-d="${r.slicing_file_path}">⬇ Slicing file</button><span style="flex:1"></span>
+  <button class="ok" data-a="${r.id}:Approved">Approve</button><button class="no" data-a="${r.id}:Rejected">Reject</button><button class="wa" data-a="${r.id}:More Info">Request info</button>${r.status!=="Pending"?`<button data-e="${r.id}">✉ Resend email</button>`:""}</div></div>`).join(""):`<p class="small">No requests.</p>`}</div>`;
+  $("#pane").onclick=async e=>{const b=e.target.closest("button");if(!b)return;
+    if(b.dataset.f){filter=b.dataset.f;return renderAdmin();}
+    if(b.dataset.d){const{data,error}=await sb.storage.from("files").createSignedUrl(b.dataset.d,60,{download:true});return error?alert(error.message):(location.href=data.signedUrl);}
+    if(b.dataset.a){const[id,s]=b.dataset.a.split(":");return decide(reqs.find(r=>r.id===id),s);}
+    if(b.dataset.e)return sendMail(b.dataset.e);};
+}
+async function sendMail(id){
+  const{data,error}=await sb.functions.invoke("send-decision",{body:{id}});
+  notice=error||data?.error?{t:"err",m:"Email failed: "+(data?.error||error.message)}:{t:"good",m:"Decision email sent to the student."};renderAdmin();
+}
+function decide(r,status){
+  const m=document.createElement("div");m.className="modal";
+  m.innerHTML=`<div><h2>${status==="More Info"?"Request more information":status} – ${esc(r.name)}</h2><label>Message to student ${status==="More Info"?"(required)":"(optional)"}</label><textarea id="note" rows="4">${esc(r.admin_note||"")}</textarea><p class="small">The decision will be emailed to ${esc(r.email)}.</p><div class="row"><button class="pri" id="go">Confirm &amp; send</button><button id="cx">Cancel</button></div></div>`;
+  document.body.append(m);$("#cx").onclick=()=>m.remove();
+  $("#go").onclick=async()=>{const note=$("#note").value.trim();if(status==="More Info"&&!note)return $("#note").focus();
+    const{error}=await sb.from("requests").update({status,admin_note:note||null,decided_at:new Date().toISOString()}).eq("id",r.id);
+    m.remove();if(error){notice={t:"err",m:error.message};return renderAdmin();}
+    await load();await sendMail(r.id);};
+}
+function paneStats(){
+  const c=s=>reqs.filter(r=>r.status===s).length,tot=reqs.length;
+  const data=[["Submitted (awaiting response)",c("Pending"),"var(--mu)"],["Approved",c("Approved"),"var(--ok)"],["Rejected",c("Rejected"),"var(--no)"],["More info requested",c("More Info"),"var(--wa)"]].filter(d=>d[1]>0);
+  let a0=-Math.PI/2,p="";
+  if(data.length===1)p=`<circle cx="100" cy="100" r="90" fill="${data[0][2]}"/>`;
+  else data.forEach(([l,v,col])=>{const a1=a0+v/tot*2*Math.PI;p+=`<path d="M100 100L${100+90*Math.cos(a0)} ${100+90*Math.sin(a0)}A90 90 0 ${a1-a0>Math.PI?1:0} 1 ${100+90*Math.cos(a1)} ${100+90*Math.sin(a1)}Z" fill="${col}" stroke="var(--card)" stroke-width="2"/>`;a0=a1});
+  $("#pane").innerHTML=`<div class="card"><h2>Request statistics</h2>${tot?`<div class="row" style="gap:28px"><svg viewBox="0 0 200 200" width="240" height="240">${p}</svg><div>${data.map(([l,v,col])=>`<div class="row"><span style="width:14px;height:14px;border-radius:3px;background:${col};display:inline-block"></span><b>${esc(l)}</b>: ${v} (${Math.round(v/tot*100)}%)</div>`).join("")}<p class="small">Total submitted: ${tot}</p></div></div>`:`<p class="small">No requests yet.</p>`}</div>`;
+}
+function panePrint(){
+  $("#pane").innerHTML=`<div class="card"><h2>3D printers</h2><div class="scroll"><table><thead><tr><th>Brand</th><th>Model</th><th>Serial number</th><th>Status</th><th></th></tr></thead><tbody>${printers.map(p=>`<tr><td>${esc(p.brand)}</td><td>${esc(p.model)}</td><td>${esc(p.serial)}</td><td><select data-s="${p.id}" class="${cls(p.status)}">${PST.map(o=>`<option ${o===p.status?"selected":""}>${o}</option>`).join("")}</select></td><td><button class="no" data-x="${p.id}">Delete</button></td></tr>`).join("")||`<tr><td colspan="5" class="small">No printers yet.</td></tr>`}</tbody></table></div></div>
+  <div class="card"><h2>Add printer</h2><div class="grid"><div><label>Brand</label><input id="pb"></div><div><label>Model</label><input id="pm"></div><div><label>Serial number</label><input id="ps"></div><div><label>Status</label><select id="pt">${PST.map(o=>`<option>${o}</option>`).join("")}</select></div></div><br><button class="pri" id="pa">Add printer</button></div>`;
+  $("#pa").onclick=async()=>{const v=i=>$("#"+i).value.trim();if(!v("pb")||!v("pm")||!v("ps"))return alert("Brand, model and serial number are required.");
+    const{error}=await sb.from("printers").insert({brand:v("pb"),model:v("pm"),serial:v("ps"),status:v("pt")});if(error)return alert(error.message);await load();renderAdmin();};
+  $("#pane").onchange=async e=>{if(e.target.dataset.s){const{error}=await sb.from("printers").update({status:e.target.value}).eq("id",e.target.dataset.s);if(error)alert(error.message);await load();renderAdmin();}};
+  $("#pane").onclick=async e=>{const b=e.target.closest("button[data-x]");if(b&&confirm("Delete this printer?")){await sb.from("printers").delete().eq("id",b.dataset.x);await load();renderAdmin();}};
+}
+boot();
+</script></body></html>
